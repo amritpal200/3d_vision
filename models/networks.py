@@ -649,7 +649,7 @@ def random_crop(reals, fakes, winsize=48):
     return reals[:,:,y:y+winsize,x:x+winsize], fakes[:,:,y:y+winsize,x:x+winsize]
 
 def define_MTM(input_nc_A=29, input_nc_B=3, ngf=64, n_layers=3, img_height=512, img_width=320, grid_size=5, add_tps=True, 
-            add_depth=True, add_segmt=True, norm='instance', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+            add_depth=True, add_segmt=True, latent_dim=128, norm='instance', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     """Create MTM model. 
 
     Parameters:
@@ -670,7 +670,7 @@ def define_MTM(input_nc_A=29, input_nc_B=3, ngf=64, n_layers=3, img_height=512, 
     
     norm_layer = get_norm_layer(norm_type=norm)
     device = f'cuda:{gpu_ids[0]}' if len(gpu_ids) > 0 else 'cpu'
-    net = MTM(input_nc_A, input_nc_B, ngf, n_layers, img_height, img_width, grid_size, add_tps, add_depth, add_segmt, norm_layer, use_dropout, device)
+    net = MTM(input_nc_A, input_nc_B, ngf, n_layers, img_height, img_width, grid_size, add_tps, add_depth, add_segmt, latent_dim, norm_layer, use_dropout, device)
     
     return init_net(net, init_type, init_gain, gpu_ids)
 
@@ -681,10 +681,12 @@ def define_TFM(input_nc=9, output_nc=4, num_downs=6, ngf=64, norm='instance', us
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
-def define_DRM(input_nc=4, output_nc=2, ngf=32, norm='instanc', init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_DRM(latent_dim=128, point_dim=3, hidden_dim=256, num_layers=5, output_dim=1,
+               norm='instanc', init_type='normal', init_gain=0.02, gpu_ids=[]):
     norm_layer = get_norm_layer(norm_type=norm)
 
-    net = DRM(input_nc, output_nc, ngf, norm_layer)
+    net = SDF(latent_dim=latent_dim, point_dim=point_dim, hidden_dim=hidden_dim,
+              num_layers=num_layers, output_dim=output_dim)
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
@@ -740,7 +742,7 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
 ##############################################################################
 class MTM(nn.Module):
     def __init__(self, input_nc_A=29, input_nc_B=3, ngf=64, n_layers=3, img_height=512, img_width=320, grid_size=5, 
-                add_tps=True, add_depth=True, add_segmt=True, norm_layer=nn.InstanceNorm2d, use_dropout=False, device='cpu'):
+                add_tps=True, add_depth=True, add_segmt=True, latent_dim=128, norm_layer=nn.InstanceNorm2d, use_dropout=False, device='cpu'):
         super(MTM, self).__init__()
         self.add_tps = add_tps
         self.add_depth = add_depth
@@ -759,6 +761,12 @@ class MTM(nn.Module):
         if self.add_depth:
             self.depth_dec = DepthDec(in_nc=1024)
 
+        # latent projection: global pooled concatenated features -> latent z
+        # featureAB has 1024 channels because it concatenates two 512-channel feature maps
+        self.latent_dim = latent_dim
+        self.z_pool = nn.AdaptiveAvgPool2d(1)
+        self.z_proj = nn.Linear(1024, latent_dim)
+
     def forward(self, inputA, inputB):
         """ 
             input A: agnostic (batch_size,12,512,320)
@@ -767,14 +775,21 @@ class MTM(nn.Module):
         output = {'theta_tps':None, 'grid_tps':None, 'depth':None, 'segmt':None}
         featureA = self.extractionA(inputA) # featureA: size (batch_size,512,32,20)
         featureB = self.extractionB(inputB) # featureB: size (batch_size,512,32,20)
-        if self.add_depth or self.add_segmt:
-            featureAB = torch.cat([featureA, featureB], 1) # input for DepthDec and SegmtDec: (batch_size,1024,32,20)
-            if self.add_depth:
-                depth_pred = self.depth_dec(featureAB)
-                output['depth'] = depth_pred
-            if self.add_segmt:
-                segmt_pred = self.segmt_dec(featureAB)
-                output['segmt'] = segmt_pred
+        featureAB = torch.cat([featureA, featureB], 1) # (batch_size,1024,32,20)
+
+        # compute latent z from the concatenated feature representation
+        pooled = self.z_pool(featureAB)  # (B, 1024, 1, 1)
+        pooled = pooled.view(pooled.size(0), pooled.size(1))
+        z = self.z_proj(pooled)  # (B, latent_dim)
+        output['z'] = z.unsqueeze(1)  # (B,1,latent_dim)
+
+        if self.add_depth:
+            depth_pred = self.depth_dec(featureAB)
+            output['depth'] = depth_pred
+        if self.add_segmt:
+            segmt_pred = self.segmt_dec(featureAB)
+            output['segmt'] = segmt_pred
+
         if self.add_tps:
             featureA = self.l2norm(featureA)
             featureB = self.l2norm(featureB)
@@ -784,6 +799,40 @@ class MTM(nn.Module):
             output['theta_tps'], output['grid_tps'] = theta_tps, grid_tps
 
         return output
+
+
+class SDF(nn.Module):
+    def __init__(self, latent_dim=128, point_dim=3, hidden_dim=256, num_layers=5, output_dim=1):
+        super(SDF, self).__init__()
+        self.latent_dim = latent_dim
+        self.point_dim = point_dim
+
+        layers = []
+        current_dim = latent_dim + point_dim
+        for _ in range(max(num_layers - 1, 1)):
+            layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.ReLU(inplace=True))
+            current_dim = hidden_dim
+        layers.append(nn.Linear(current_dim, output_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, latent_z, points):
+        if latent_z.dim() == 2:
+            latent_z = latent_z.unsqueeze(1)
+        if points.dim() == 2:
+            points = points.unsqueeze(1)
+
+        if latent_z.size(1) == 1 and points.size(1) > 1:
+            latent_z = latent_z.expand(-1, points.size(1), -1)
+        elif points.size(1) == 1 and latent_z.size(1) > 1:
+            points = points.expand(-1, latent_z.size(1), -1)
+        elif latent_z.size(1) != points.size(1):
+            raise ValueError('latent_z and points must share the same sample dimension')
+
+        sdf_input = torch.cat([latent_z, points], dim=-1)
+        sdf_input = sdf_input.reshape(-1, sdf_input.size(-1))
+        sdf = self.mlp(sdf_input)
+        return sdf.view(points.size(0), points.size(1), -1)
 
 class UnetGenerator(nn.Module):
     """Defines the Unet generator."""

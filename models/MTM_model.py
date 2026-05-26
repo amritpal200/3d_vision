@@ -39,6 +39,7 @@ class MTMModel(BaseModel):
         # parser.add_argument('--use_featB_for_depth', action='store_true', help='if specified, use featB for depth')
         parser.add_argument('--add_segmt', action='store_true', default = True, help='if specified, add segmentation decoder')        
         parser.add_argument('--grid_size', type=int, default=3, help='size of the grid used to estimate TPS params.')                
+        parser.add_argument('--latent_dim', type=int, default=128, help='dimension of latent z to emit for DRM')
         parser.add_argument('--input_nc_A', type=int, default=29, help='input nc of feature extraction A [11 for roi agnostic type | 29 for full agnostic type]')
         parser.add_argument('--input_nc_B', type=int, default=3, help='input nc of feature extraction B')
         parser.add_argument('--n_layers_feat_extract', type=int, default=3, help='# layers in feater extraction of MTM')
@@ -98,7 +99,7 @@ class MTMModel(BaseModel):
         self.model_names = ['MTM']
         
         # define networks; you can use opt.isTrain to specify different behaviors for training and test.
-        self.netMTM = networks.define_MTM(opt.input_nc_A, opt.input_nc_B, opt.ngf, opt.n_layers_feat_extract, opt.img_height, opt.img_width, opt.grid_size, opt.add_tps, opt.add_depth, opt.add_segmt, opt.norm, opt.use_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+        self.netMTM = networks.define_MTM(opt.input_nc_A, opt.input_nc_B, opt.ngf, opt.n_layers_feat_extract, opt.img_height, opt.img_width, opt.grid_size, opt.add_tps, opt.add_depth, opt.add_segmt, opt.latent_dim, opt.norm, opt.use_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:  # only defined during training time
             # define loss functions.
