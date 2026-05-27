@@ -1,4 +1,4 @@
-# python3 tools/train_mtm_drm.py --num_epochs 50 --batch_size 50 --save_freq 1000
+# python3 tools/train_mtm_drm.py --num_epochs 50 --batch_size 50 --sdf_num_points 256 --save_freq 1000
 
 """Simple MTM+DRM trainer (proof-of-concept)
 
@@ -32,6 +32,11 @@ opt.point_dim = 3
 opt.sdf_hidden_dim = 128
 opt.sdf_num_layers = 3
 opt.sdf_num_points = 32
+opt.lambda_coarse = 1.0
+opt.lambda_surface = 0.1
+opt.lambda_sign = 0.1
+opt.lambda_eikonal = 0.1
+opt.lambda_normal = 0.1
 opt.norm = 'instance'
 opt.init_type = 'normal'
 opt.init_gain = 0.02
@@ -57,6 +62,11 @@ parser.add_argument('--save_freq', type=int, default=opt.save_freq)
 parser.add_argument('--val_frac', type=float, default=opt.val_frac)
 parser.add_argument('--val_max_batches', type=int, default=opt.val_max_batches)
 parser.add_argument('--sdf_num_points', type=int, default=opt.sdf_num_points)
+parser.add_argument('--lambda_coarse', type=float, default=opt.lambda_coarse)
+parser.add_argument('--lambda_surface', type=float, default=opt.lambda_surface)
+parser.add_argument('--lambda_sign', type=float, default=opt.lambda_sign)
+parser.add_argument('--lambda_eikonal', type=float, default=opt.lambda_eikonal)
+parser.add_argument('--lambda_normal', type=float, default=opt.lambda_normal)
 parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='training batch size')
 parser.add_argument('--wandb_project', type=str, default=opt.wandb_project)
 parser.add_argument('--max_iters', type=int, default=-1, help='If >0, cap total iterations; else run full epochs')
@@ -68,6 +78,11 @@ opt.save_freq = args.save_freq
 opt.val_frac = args.val_frac
 opt.val_max_batches = args.val_max_batches
 opt.sdf_num_points = args.sdf_num_points
+opt.lambda_coarse = args.lambda_coarse
+opt.lambda_surface = args.lambda_surface
+opt.lambda_sign = args.lambda_sign
+opt.lambda_eikonal = args.lambda_eikonal
+opt.lambda_normal = args.lambda_normal
 opt.wandb_project = args.wandb_project
 MAX_ITERS = args.max_iters if args.max_iters > 0 else float('inf')
 opt.batch_size = args.batch_size

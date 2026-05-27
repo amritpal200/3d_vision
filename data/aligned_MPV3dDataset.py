@@ -204,11 +204,22 @@ class AlignedMPV3dDataset(BaseDataset):
         # precomputed SDF query points / values
         sdf_points = None
         sdf_gt = None
+        sdf_surface_points = None
+        sdf_surface_normals = None
         sdf_path = os.path.join(self.dataroot, 'sdf', self.datalist, im_name.replace('.png', '.npz'))
         if os.path.exists(sdf_path):
             sdf_npz = np.load(sdf_path)
             sdf_points = torch.from_numpy(sdf_npz['points'].astype(np.float32))
             sdf_gt = torch.from_numpy(sdf_npz['sdf'].astype(np.float32)).unsqueeze(1)
+            if 'surface_points' in sdf_npz:
+                sdf_surface_points = torch.from_numpy(sdf_npz['surface_points'].astype(np.float32))
+            if 'surface_normals' in sdf_npz:
+                sdf_surface_normals = torch.from_numpy(sdf_npz['surface_normals'].astype(np.float32))
+        if sdf_points is None:
+            sdf_points = torch.zeros(0, 3, dtype=torch.float32)
+            sdf_gt = torch.zeros(0, 1, dtype=torch.float32)
+            sdf_surface_points = torch.zeros(0, 3, dtype=torch.float32)
+            sdf_surface_normals = torch.zeros(0, 3, dtype=torch.float32)
 
         # load pose points
         if self.model == 'MTM':
@@ -252,6 +263,8 @@ class AlignedMPV3dDataset(BaseDataset):
             'initial_bdepth': imbd_initial,
             'sdf_points': sdf_points,
             'sdf_gt': sdf_gt,
+            'surface_points': sdf_surface_points,
+            'surface_normals': sdf_surface_normals,
             'pose':            im_pose_vis,
             'agnostic':           agnostic,
             'grid_image':             im_g,   

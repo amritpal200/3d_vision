@@ -10,6 +10,8 @@ computes signed distance values, and saves them as .npz files under:
 Each .npz contains:
     - points: (N, 3) float32
     - sdf:    (N,) float32
+    - surface_points: (M, 3) float32
+    - surface_normals: (M, 3) float32
 
 The training code then loads these files from the dataset.
 """
@@ -19,6 +21,7 @@ import os
 import sys
 
 import numpy as np
+from PIL import Image
 
 sys.path.append('.')
 
@@ -76,6 +79,59 @@ def build_surface_points(depth_f, depth_b, xmag=1.0, ymag=1.0):
     return surface_b
 
 
+def compute_surface_normals(depth, xmag=1.0, ymag=1.0):
+    """Approximate camera-space normals from an orthographic depth map."""
+    if depth is None:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    depth = depth.astype(np.float32)
+    H, W = depth.shape
+    dx = (2.0 * xmag) / max(W - 1, 1)
+    dy = (2.0 * ymag) / max(H - 1, 1)
+
+    # gradients are computed in image order: d/dy, d/dx
+    dz_dy, dz_dx = np.gradient(depth, dy, dx)
+    nx = -dz_dx
+    ny = -dz_dy
+    nz = np.ones_like(depth, dtype=np.float32)
+    normals = np.stack([nx, ny, nz], axis=-1)
+    norm = np.linalg.norm(normals, axis=-1, keepdims=True)
+    normals = normals / np.maximum(norm, 1e-8)
+    return normals.astype(np.float32)
+
+
+def world_normals_from_camera(normals_cam, cam_pose):
+    rot = cam_pose[:3, :3].astype(np.float32)
+    normals_world = normals_cam.reshape(-1, 3) @ rot.T
+    norm = np.linalg.norm(normals_world, axis=-1, keepdims=True)
+    normals_world = normals_world / np.maximum(norm, 1e-8)
+    return normals_world.astype(np.float32)
+
+
+def sample_valid_surface_points(depth, normals, cam_pose, max_points):
+    if depth is None:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+
+    surface_pts, _ = backproject_ortho_depth(depth, xmag=1.0, ymag=1.0, cam_pose=cam_pose)
+    valid_mask = depth.reshape(-1) > 0
+    normals_world = world_normals_from_camera(normals, cam_pose)
+
+    normals_world = normals_world[valid_mask.reshape(-1)]
+
+    # `surface_pts` is already filtered by backproject_ortho_depth using the same valid mask.
+    # Keep it as-is and only filter normals to the corresponding valid pixels.
+
+    if surface_pts.shape[0] == 0:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+
+    if surface_pts.shape[0] > max_points:
+        idx = np.random.choice(surface_pts.shape[0], size=max_points, replace=False)
+        surface_pts = surface_pts[idx]
+        normals_world = normals_world[idx]
+
+    return surface_pts.astype(np.float32), normals_world.astype(np.float32)
+
+
 def precompute_split(dataroot, split_name, num_points, sigma, overwrite=False):
     entries = load_split_entries(dataroot, split_name)
     out_root = os.path.join(dataroot, 'sdf', split_name)
@@ -91,14 +147,45 @@ def precompute_split(dataroot, split_name, num_points, sigma, overwrite=False):
         depth_f_path = os.path.join(dataroot, 'depth', im_name.replace('.png', '_depth.npy'))
         depth_b_path = os.path.join(dataroot, 'depth', im_name.replace('front.png', 'back_depth.npy'))
 
-        depth_f = np.load(depth_f_path) if os.path.exists(depth_f_path) else None
-        depth_b = np.load(depth_b_path) if os.path.exists(depth_b_path) else None
+        depth_f = np.load(depth_f_path).astype(np.float32) if os.path.exists(depth_f_path) else None
+        depth_b = np.load(depth_b_path).astype(np.float32) if os.path.exists(depth_b_path) else None
+        if depth_b is not None:
+            depth_b = np.flip(depth_b, axis=1)  # match dataset loader alignment
 
         surface_pts = build_surface_points(depth_f, depth_b)
         points = sample_points_near_surface(surface_pts, num_points, sigma=sigma)
         sdf = compute_signed_sdf(points, surface_pts, depth_map=depth_f, cam_pose=FRONT_CAM_POSE, xmag=1.0, ymag=1.0)
 
-        np.savez_compressed(out_path, points=points.astype(np.float32), sdf=sdf.astype(np.float32))
+        surface_points_f, surface_normals_f = sample_valid_surface_points(
+            depth_f,
+            compute_surface_normals(depth_f) if depth_f is not None else np.zeros((0, 3), dtype=np.float32),
+            FRONT_CAM_POSE,
+            num_points,
+        )
+        surface_points_b, surface_normals_b = sample_valid_surface_points(
+            depth_b,
+            compute_surface_normals(depth_b) if depth_b is not None else np.zeros((0, 3), dtype=np.float32),
+            BACK_CAM_POSE,
+            num_points,
+        )
+
+        if surface_points_f.size and surface_points_b.size:
+            surface_points = np.concatenate([surface_points_f, surface_points_b], axis=0)
+            surface_normals = np.concatenate([surface_normals_f, surface_normals_b], axis=0)
+        elif surface_points_f.size:
+            surface_points = surface_points_f
+            surface_normals = surface_normals_f
+        else:
+            surface_points = surface_points_b
+            surface_normals = surface_normals_b
+
+        np.savez_compressed(
+            out_path,
+            points=points.astype(np.float32),
+            sdf=sdf.astype(np.float32),
+            surface_points=surface_points.astype(np.float32),
+            surface_normals=surface_normals.astype(np.float32),
+        )
         print(f'[{idx+1}/{len(entries)}] wrote {out_path}')
 
 
