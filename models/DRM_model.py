@@ -90,7 +90,7 @@ class DRMModel(BaseModel):
 
         # try common keys for latent and points
         self.z = input.get('z', input.get('encoded_z', input.get('latent_z')))
-        self.points = input.get('points', input.get('point_xyz', input.get('xyz')))
+        self.points = input.get('points', input.get('sdf_points', input.get('point_xyz', input.get('xyz'))))
 
         # infer batch size from available tensors (e.g., cloth) else default to 1
         batch_size = 1

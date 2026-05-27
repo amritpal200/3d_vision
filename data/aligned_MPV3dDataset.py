@@ -201,6 +201,15 @@ class AlignedMPV3dDataset(BaseDataset):
             imbd = imbd * imbd_m
             imbd = torch.from_numpy(imbd).unsqueeze(0)
 
+        # precomputed SDF query points / values
+        sdf_points = None
+        sdf_gt = None
+        sdf_path = os.path.join(self.dataroot, 'sdf', self.datalist, im_name.replace('.png', '.npz'))
+        if os.path.exists(sdf_path):
+            sdf_npz = np.load(sdf_path)
+            sdf_points = torch.from_numpy(sdf_npz['points'].astype(np.float32))
+            sdf_gt = torch.from_numpy(sdf_npz['sdf'].astype(np.float32)).unsqueeze(1)
+
         # load pose points
         if self.model == 'MTM':
             pose_path = os.path.join(self.dataroot, 'pose', im_name.replace('.png', '_keypoints.json'))
@@ -241,6 +250,8 @@ class AlignedMPV3dDataset(BaseDataset):
             'initial_fdepth': imfd_initial,  
             'person_bdepth':          imbd,
             'initial_bdepth': imbd_initial,
+            'sdf_points': sdf_points,
+            'sdf_gt': sdf_gt,
             'pose':            im_pose_vis,
             'agnostic':           agnostic,
             'grid_image':             im_g,   

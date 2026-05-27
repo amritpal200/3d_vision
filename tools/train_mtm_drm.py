@@ -1,4 +1,4 @@
-# python3 tools/train_mtm_drm.py --num_epochs 50 --batch_size 1000 --sdf_num_points 256 --save_freq 1000
+# python3 tools/train_mtm_drm.py --num_epochs 50 --batch_size 50 --save_freq 1000
 
 """Simple MTM+DRM trainer (proof-of-concept)
 
@@ -18,8 +18,6 @@ from models import networks
 from models.DRM_model import DRMModel
 from data import create_dataset
 import os
-from util.sdf_from_depth import backproject_ortho_depth, sample_points_near_surface, compute_signed_sdf
-import numpy as np
 import wandb
 from torch.utils.data import DataLoader, random_split
 
@@ -176,56 +174,11 @@ def main():
             if z is not None:
                 z = z.to(drm.device)
 
-            # prepare DRM batch
+            # prepare DRM batch using precomputed SDF fields from the dataset
             drm_batch = dict(data)
             for k, v in list(drm_batch.items()):
                 if isinstance(v, torch.Tensor):
                     drm_batch[k] = v.to(drm.device)
-
-            # Generate query points and sdf_gt from raw depth files when available
-            N = getattr(opt, 'sdf_num_points', 64)
-            im_name = data.get('im_name', None)
-            im_names = im_name if isinstance(im_name, (list, tuple)) else [im_name]
-            batch_pts = []
-            batch_sdfs = []
-            for idx, name in enumerate(im_names):
-                if name is None:
-                    depth_f = None
-                    depth_b = None
-                else:
-                    front_depth_path = os.path.join(ds_opt.dataroot, 'depth', name.replace('.png', '_depth.npy'))
-                    back_depth_path = os.path.join(ds_opt.dataroot, 'depth', name.replace('front.png', 'back_depth.npy'))
-                    depth_f = np.load(front_depth_path) if os.path.exists(front_depth_path) else None
-                    depth_b = np.load(back_depth_path) if os.path.exists(back_depth_path) else None
-
-                cam_front_pose = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,2],[0,0,0,1]], dtype=np.float32)
-                cam_back_pose = np.array([[-1,0,0,0],[0,1,0,0],[0,0,-1,-2],[0,0,0,1]], dtype=np.float32)
-                xmag = 1.0
-                ymag = 1.0
-
-                if depth_f is not None:
-                    surface_pts_f, _ = backproject_ortho_depth(depth_f, xmag=xmag, ymag=ymag, cam_pose=cam_front_pose)
-                else:
-                    surface_pts_f = np.zeros((0,3), dtype=np.float32)
-                if depth_b is not None:
-                    surface_pts_b, _ = backproject_ortho_depth(depth_b, xmag=xmag, ymag=ymag, cam_pose=cam_back_pose)
-                else:
-                    surface_pts_b = np.zeros((0,3), dtype=np.float32)
-
-                if surface_pts_f.size and surface_pts_b.size:
-                    surface_pts = np.concatenate([surface_pts_f, surface_pts_b], axis=0)
-                else:
-                    surface_pts = surface_pts_f if surface_pts_f.size else surface_pts_b
-
-                pts_np = sample_points_near_surface(surface_pts, N)
-                sdf_vals = compute_signed_sdf(pts_np, surface_pts, depth_map=depth_f, cam_pose=cam_front_pose, xmag=xmag, ymag=ymag)
-                batch_pts.append(pts_np)
-                batch_sdfs.append(sdf_vals)
-
-            pts_batch_np = np.stack(batch_pts, axis=0)  # (B, N, 3)
-            sdf_batch_np = np.stack(batch_sdfs, axis=0)  # (B, N)
-            drm_batch['points'] = torch.from_numpy(pts_batch_np).float().to(drm.device)
-            drm_batch['sdf'] = torch.from_numpy(sdf_batch_np).float().to(drm.device).unsqueeze(-1)
             if z is not None:
                 drm_batch['z'] = z
 
@@ -236,14 +189,14 @@ def main():
             # log training loss to console and wandb
             loss_val = drm.loss_sdf.detach().item()
             if it % 5 == 0:
-                print(f'Iter {it}/{NUM_ITERS}  loss_sdf={loss_val:.6f}')
+                print(f'Iter {it}/{MAX_ITERS}  loss_sdf={loss_val:.6f}')
             try:
                 wandb.log({'train/loss_sdf': loss_val, 'train/iter': it, 'train/epoch': epoch+1})
             except Exception:
                 pass
 
             # small validation using the same batch (no grad)
-            if it % 10 == 0:
+            if it % 500 == 0:
                 drm.eval()
                 with torch.no_grad():
                     drm.forward()
@@ -278,72 +231,12 @@ def main():
                 for k, v in list(vbatch.items()):
                     if isinstance(v, torch.Tensor):
                         vbatch[k] = v.to(drm.device)
-                # generate points/sdf if not present (per-sample in the batch)
-                if 'points' not in vbatch or 'sdf' not in vbatch:
-                    N = getattr(opt, 'sdf_num_points', 64)
-                    # infer batch size from any tensor in vbatch
-                    batch_size = 1
-                    for vv in vbatch.values():
-                        if isinstance(vv, torch.Tensor):
-                            batch_size = int(vv.size(0))
-                            break
-
-                    im_names = vbatch.get('im_name', None)
-                    batch_pts_list = []
-                    batch_sdf_list = []
-                    for bi in range(batch_size):
-                        # pick per-sample im_name if available
-                        name = None
-                        if im_names is not None:
-                            if isinstance(im_names, (list, tuple)):
-                                name = im_names[bi]
-                            else:
-                                try:
-                                    name = im_names[bi]
-                                except Exception:
-                                    name = im_names
-
-                        if name is None:
-                            depth_f = None
-                            depth_b = None
-                        else:
-                            front_depth_path = os.path.join(ds_opt.dataroot, 'depth', str(name).replace('.png', '_depth.npy'))
-                            back_depth_path = os.path.join(ds_opt.dataroot, 'depth', str(name).replace('front.png', 'back_depth.npy'))
-                            depth_f = np.load(front_depth_path) if os.path.exists(front_depth_path) else None
-                            depth_b = np.load(back_depth_path) if os.path.exists(back_depth_path) else None
-
-                        cam_front_pose = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,2],[0,0,0,1]], dtype=np.float32)
-                        cam_back_pose = np.array([[-1,0,0,0],[0,1,0,0],[0,0,-1,-2],[0,0,0,1]], dtype=np.float32)
-                        if depth_f is not None:
-                            surface_pts_f, _ = backproject_ortho_depth(depth_f, xmag=1.0, ymag=1.0, cam_pose=cam_front_pose)
-                        else:
-                            surface_pts_f = np.zeros((0,3), dtype=np.float32)
-                        if depth_b is not None:
-                            surface_pts_b, _ = backproject_ortho_depth(depth_b, xmag=1.0, ymag=1.0, cam_pose=cam_back_pose)
-                        else:
-                            surface_pts_b = np.zeros((0,3), dtype=np.float32)
-
-                        if surface_pts_f.size and surface_pts_b.size:
-                            surface_pts = np.concatenate([surface_pts_f, surface_pts_b], axis=0)
-                        else:
-                            surface_pts = surface_pts_f if surface_pts_f.size else surface_pts_b
-
-                        pts_np = sample_points_near_surface(surface_pts, N)
-                        sdf_vals = compute_signed_sdf(pts_np, surface_pts, depth_map=depth_f, cam_pose=cam_front_pose, xmag=1.0, ymag=1.0)
-                        batch_pts_list.append(pts_np)
-                        batch_sdf_list.append(sdf_vals)
-
-                    pts_batch_np = np.stack(batch_pts_list, axis=0)
-                    sdf_batch_np = np.stack(batch_sdf_list, axis=0)
-                    vbatch['points'] = torch.from_numpy(pts_batch_np).float().to(drm.device)
-                    vbatch['sdf'] = torch.from_numpy(sdf_batch_np).float().to(drm.device).unsqueeze(-1)
-
                 drm.set_input(vbatch)
                 drm.forward()
                 val_losses.append(torch.abs(drm.sdf_pred - drm.sdf_gt).mean().item())
         drm.train()
         if val_losses:
-            mean_val = float(np.mean(val_losses))
+            mean_val = float(sum(val_losses) / len(val_losses))
             print(f'Validation mean loss: {mean_val:.6f}')
             try:
                 wandb.log({'val/epoch_loss': mean_val, 'epoch': epoch+1})
