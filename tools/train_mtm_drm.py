@@ -187,6 +187,15 @@ def main():
     start = time.time()
     it = 0
     best_val = float('inf')
+
+    def save_mtm_checkpoint(tag):
+        os.makedirs(drm.save_dir, exist_ok=True)
+        save_path = os.path.join(drm.save_dir, f'{tag}_net_MTM.pth')
+        net_to_save = raw_mtm.module if isinstance(raw_mtm, torch.nn.DataParallel) else raw_mtm
+        torch.save(net_to_save.cpu().state_dict(), save_path)
+        net_to_save.to(device)
+        print(f'Saved MTM checkpoint at {save_path}')
+
     for epoch in range(getattr(opt, 'num_epochs', 1)):
         print(f'=== Epoch {epoch+1}/{opt.num_epochs} ===')
         for i, data in enumerate(train_loader):
@@ -283,10 +292,12 @@ def main():
                 print(f'New best val {best_val:.6f} -> saving best model')
                 os.makedirs(drm.save_dir, exist_ok=True)
                 drm.save_networks('best')
+                save_mtm_checkpoint('best')
 
     # final save
     os.makedirs(drm.save_dir, exist_ok=True)
     drm.save_networks('final')
+    save_mtm_checkpoint('final')
     final_ckpt = os.path.join(drm.save_dir, f'final_net_DRM.pth')
     # do NOT upload checkpoints to wandb; only metrics are logged online
     print('Done. Time: %.2fs' % (time.time() - start))

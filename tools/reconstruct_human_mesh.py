@@ -93,7 +93,8 @@ def build_model_opt(args, gpu_ids):
     opt.gpu_ids = gpu_ids
     opt.isTrain = False
     opt.lr = 0.001
-    opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
+    # opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
+    opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
     opt.datamode = 'aligned'
     opt.name = 'DRM_train'
     opt.display_ncols = 2
@@ -246,10 +247,10 @@ def main():
     parser.add_argument('--sample_index', type=int, default=0)
     parser.add_argument('--num_images', type=int, default=1, help='number of dataset samples to reconstruct')
     parser.add_argument('--start_index', type=int, default=0, help='dataset index to start from')
-    parser.add_argument('--mtm_ckpt', type=str, default='/data/113-1/users/asingh/project/3d/checkpoints/MTM/latest_net_MTM.pth')
-    parser.add_argument('--drm_ckpt', type=str, default='./checkpoints/aligned/DRM_train/best_net_DRM.pth')
-    parser.add_argument('--output_dir', type=str, default='/data/113-1/users/asingh/project/3d/mesh_results')
-    parser.add_argument('--output_name', type=str, default='/data/113-1/users/asingh/project/3d/reconstruction.obj')
+    parser.add_argument('--mtm_ckpt', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth')
+    parser.add_argument('--drm_ckpt', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints/aligned/DRM_train/epoch_9_net_DRM.pth')
+    parser.add_argument('--output_dir', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/mesh_results')
+    parser.add_argument('--output_name', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/mesh_results/reconstruction.obj')
     parser.add_argument('--resolution', type=int, default=96)
     parser.add_argument('--chunk_size', type=int, default=65536)
     parser.add_argument('--iso_level', type=float, default=0.0)
