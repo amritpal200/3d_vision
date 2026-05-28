@@ -23,8 +23,8 @@ import wandb
 from torch.utils.data import DataLoader, random_split
 
 # Config
-# MTM_CKPT = '/data/113-1/users/asingh/project/3d/checkpoints/MTM/latest_net_MTM.pth'
-MTM_CKPT = '/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth'
+MTM_CKPT = '/data/113-1/users/asingh/project/3d/checkpoints/MTM/latest_net_MTM.pth'
+# MTM_CKPT = '/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth'
 NUM_ITERS = 20
 BATCH_SIZE = 2
 
@@ -45,8 +45,8 @@ opt.init_gain = 0.02
 opt.gpu_ids = []
 opt.isTrain = True
 opt.lr = 0.001
-# opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
-opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
+opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
+# opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
 opt.datamode = 'aligned'
 opt.name = 'DRM_train'
 opt.display_ncols = 2
@@ -99,8 +99,8 @@ else:
 def main():
     # prepare options for dataset and models
     ds_opt = SimpleNamespace()
-    # ds_opt.dataroot = '/data/113-1/users/asingh/project/3d/MPV3D'
-    ds_opt.dataroot = '/home/asingh/Desktop/uni/3d_vision/project/MPV3D'
+    ds_opt.dataroot = '/data/113-1/users/asingh/project/3d/MPV3D'
+    # ds_opt.dataroot = '/home/asingh/Desktop/uni/3d_vision/project/MPV3D'
     ds_opt.datalist = 'train_pairs'
     ds_opt.datamode = 'aligned'
     ds_opt.model = 'MTM'
