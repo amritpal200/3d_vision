@@ -240,13 +240,22 @@ def precompute_split(dataroot, split_name, num_points, sigma, overwrite=False):
             surface_normals = surface_normals_b
 
         points, sdf = sample_sdf_queries(surface_points, surface_normals, num_points, sigma=sigma)
+        # normalize sdf to [-1, 1] by max absolute value and save the scale
+        if sdf.size:
+            max_abs = float(max(abs(sdf.min()), abs(sdf.max())))
+            sdf_scale = max_abs if max_abs > 0 else 1.0
+            sdf_norm = (sdf.astype(np.float32) / sdf_scale).astype(np.float32)
+        else:
+            sdf_scale = 1.0
+            sdf_norm = sdf.astype(np.float32)
 
         np.savez_compressed(
             out_path,
             points=points.astype(np.float32),
-            sdf=sdf.astype(np.float32),
+            sdf=sdf_norm.astype(np.float32),
             surface_points=surface_points.astype(np.float32),
             surface_normals=surface_normals.astype(np.float32),
+            sdf_scale=np.array([sdf_scale], dtype=np.float32),
         )
         print(f'[{idx+1}/{len(entries)}] wrote {out_path}')
 

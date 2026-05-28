@@ -124,6 +124,7 @@ class DRMModel(BaseModel):
 
         # simulate query points if missing (shape: [B, N, 3])
         if self.points is None:
+            print(f'Warning: no query points provided for DRMModel; simulating random points. To fix this, ensure your dataset returns a key like "points" or "sdf_points" with shape [B, N, 3].')
             N = getattr(self.opt, 'sdf_num_points', 64)
             self.points = torch.randn(batch_size, N, self.point_dim, device=self.device)
         else:
@@ -139,6 +140,7 @@ class DRMModel(BaseModel):
         # get ground-truth sdf values for the sampled points; allow multiple key names
         self.sdf_gt = input.get('sdf', input.get('sdf_gt', input.get('sdf_values', None)))
         if self.sdf_gt is None:
+            print(f'Warning: no ground-truth SDF values provided for DRMModel; simulating zeros. To fix this, ensure your dataset returns a key like "sdf" or "sdf_gt" with shape [B, N, 1] corresponding to the query points.')
             # simulate zeros target so training step can run without dataset SDFs
             self.sdf_gt = torch.zeros(batch_size, self.points.size(1), 1, device=self.device)
         else:
@@ -150,6 +152,18 @@ class DRMModel(BaseModel):
         # derive sign labels from sdf if not explicitly given
         if self.sign_labels is None and self.sdf_gt is not None:
             self.sign_labels = torch.where(self.sdf_gt >= 0, torch.ones_like(self.sdf_gt), -torch.ones_like(self.sdf_gt))
+
+        # optional per-sample sdf scale (if precomputed SDF was normalized)
+        self.sdf_scale = input.get('sdf_scale', None)
+        if self.sdf_scale is None:
+            self.sdf_scale = torch.tensor(1.0, dtype=torch.float32, device=self.device)
+        else:
+            self.sdf_scale = self.sdf_scale.to(self.device)
+            # expand scalar to batch-size if necessary
+            if self.sdf_scale.dim() == 0:
+                self.sdf_scale = self.sdf_scale.unsqueeze(0).expand(batch_size)
+            elif self.sdf_scale.dim() == 1 and self.sdf_scale.size(0) == 1:
+                self.sdf_scale = self.sdf_scale.expand(batch_size)
 
     def _predict_with_grad(self, points):
         points = points.clone().detach().requires_grad_(True)
@@ -193,7 +207,20 @@ class DRMModel(BaseModel):
         if self.points is not None and self.points.numel() > 0:
             _, grads = self._predict_with_grad(self.points)
             grad_norm = torch.linalg.norm(grads, dim=-1)
-            self.loss_eikonal = ((grad_norm - 1.0) ** 2).mean()
+            # If SDFs were normalized when precomputing, the eikonal target should be 1/scale
+            try:
+                scale = self.sdf_scale
+                if isinstance(scale, torch.Tensor):
+                    if scale.dim() == 1:
+                        target = (1.0 / scale).view(-1, 1)
+                    else:
+                        target = (1.0 / scale)
+                else:
+                    target = 1.0
+            except Exception:
+                target = 1.0
+
+            self.loss_eikonal = ((grad_norm - target) ** 2).mean()
         else:
             self.loss_eikonal = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 

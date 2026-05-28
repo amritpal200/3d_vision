@@ -215,11 +215,16 @@ class AlignedMPV3dDataset(BaseDataset):
                 sdf_surface_points = torch.from_numpy(sdf_npz['surface_points'].astype(np.float32))
             if 'surface_normals' in sdf_npz:
                 sdf_surface_normals = torch.from_numpy(sdf_npz['surface_normals'].astype(np.float32))
+            if 'sdf_scale' in sdf_npz:
+                sdf_scale = torch.from_numpy(sdf_npz['sdf_scale'].astype(np.float32)).squeeze()
+            else:
+                sdf_scale = torch.tensor(1.0, dtype=torch.float32)
         if sdf_points is None:
             sdf_points = torch.zeros(0, 3, dtype=torch.float32)
             sdf_gt = torch.zeros(0, 1, dtype=torch.float32)
             sdf_surface_points = torch.zeros(0, 3, dtype=torch.float32)
             sdf_surface_normals = torch.zeros(0, 3, dtype=torch.float32)
+            sdf_scale = torch.tensor(1.0, dtype=torch.float32)
 
         # load pose points
         if self.model == 'MTM':
@@ -265,6 +270,7 @@ class AlignedMPV3dDataset(BaseDataset):
             'sdf_gt': sdf_gt,
             'surface_points': sdf_surface_points,
             'surface_normals': sdf_surface_normals,
+            'sdf_scale': sdf_scale,
             'pose':            im_pose_vis,
             'agnostic':           agnostic,
             'grid_image':             im_g,   
