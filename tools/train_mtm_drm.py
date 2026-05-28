@@ -157,6 +157,19 @@ def main():
     raw_mtm.eval()
     for p in raw_mtm.parameters():
         p.requires_grad = False
+    # train only the latent projection head so the checkpoint can learn a meaningful z
+    if hasattr(raw_mtm, 'z_proj'):
+        for p in raw_mtm.z_proj.parameters():
+            p.requires_grad = True
+        print('Training MTM z_proj jointly with DRM')
+    else:
+        print('Warning: MTM has no z_proj layer; only DRM will train')
+
+    optimizer_z = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, raw_mtm.parameters()),
+        lr=opt.lr,
+        betas=(0.5, 0.999),
+    ) if hasattr(raw_mtm, 'z_proj') else None
 
     # instantiate DRM model (training)
     drm = DRMModel(opt)
@@ -184,8 +197,9 @@ def main():
                 agnostic = agnostic.to(device)
             if isinstance(cloth, torch.Tensor):
                 cloth = cloth.to(device)
-            with torch.no_grad():
-                mtm_out = raw_mtm(agnostic, cloth)
+            if optimizer_z is not None:
+                optimizer_z.zero_grad(set_to_none=True)
+            mtm_out = raw_mtm(agnostic, cloth)
             z = mtm_out.get('z')
             if z is not None:
                 z = z.to(drm.device)
@@ -200,6 +214,8 @@ def main():
 
             drm.set_input(drm_batch)
             drm.optimize_parameters()
+            if optimizer_z is not None:
+                optimizer_z.step()
 
             it += 1
             # log training loss to console and wandb
