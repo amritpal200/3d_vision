@@ -31,9 +31,9 @@ BATCH_SIZE = 2
 opt = SimpleNamespace()
 opt.latent_dim = 128
 opt.point_dim = 3
-opt.sdf_hidden_dim = 128
-opt.sdf_num_layers = 3
-opt.sdf_num_points = 32
+opt.sdf_hidden_dim = 256
+opt.sdf_num_layers = 5
+opt.sdf_num_points = 1024
 opt.lambda_coarse = 1.0
 opt.lambda_surface = 0.1
 opt.lambda_sign = 0.1
@@ -65,6 +65,8 @@ parser.add_argument('--save_freq', type=int, default=opt.save_freq)
 parser.add_argument('--val_frac', type=float, default=opt.val_frac)
 parser.add_argument('--val_max_batches', type=int, default=opt.val_max_batches)
 parser.add_argument('--sdf_num_points', type=int, default=opt.sdf_num_points)
+parser.add_argument('--sdf_hidden_dim', type=int, default=opt.sdf_hidden_dim)
+parser.add_argument('--sdf_num_layers', type=int, default=opt.sdf_num_layers)
 parser.add_argument('--lambda_coarse', type=float, default=opt.lambda_coarse)
 parser.add_argument('--lambda_surface', type=float, default=opt.lambda_surface)
 parser.add_argument('--lambda_sign', type=float, default=opt.lambda_sign)
@@ -81,6 +83,8 @@ opt.save_freq = args.save_freq
 opt.val_frac = args.val_frac
 opt.val_max_batches = args.val_max_batches
 opt.sdf_num_points = args.sdf_num_points
+opt.sdf_hidden_dim = args.sdf_hidden_dim
+opt.sdf_num_layers = args.sdf_num_layers
 opt.lambda_coarse = args.lambda_coarse
 opt.lambda_surface = args.lambda_surface
 opt.lambda_sign = args.lambda_sign
@@ -177,6 +181,7 @@ def main():
     # instantiate DRM model (training)
     drm = DRMModel(opt)
     drm.train()
+    print(f'DRM SDF capacity: hidden_dim={opt.sdf_hidden_dim}, num_layers={opt.sdf_num_layers}, num_points={opt.sdf_num_points}')
 
     # initialize wandb
     try:

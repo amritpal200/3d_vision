@@ -15,8 +15,8 @@ MTM_CKPT = '/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth'
 opt = SimpleNamespace()
 opt.latent_dim = 128
 opt.point_dim = 3
-opt.sdf_hidden_dim = 128
-opt.sdf_num_layers = 3
+opt.sdf_hidden_dim = 256
+opt.sdf_num_layers = 5
 # only coarse supervision loss is used by DRM
 opt.sdf_num_points = 32
 opt.norm = 'instance'

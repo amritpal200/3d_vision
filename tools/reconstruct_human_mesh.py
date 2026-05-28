@@ -240,6 +240,31 @@ def marching_cubes_to_obj(sdf, xs, ys, zs, level, output_path):
     return verts_xyz, faces, normals
 
 
+def save_point_cloud_ply(points, normals, output_path):
+    has_normals = normals is not None and len(normals) == len(points)
+    with open(output_path, 'w') as f:
+        f.write('ply\n')
+        f.write('format ascii 1.0\n')
+        f.write(f'element vertex {len(points)}\n')
+        f.write('property float x\n')
+        f.write('property float y\n')
+        f.write('property float z\n')
+        if has_normals:
+            f.write('property float nx\n')
+            f.write('property float ny\n')
+            f.write('property float nz\n')
+        f.write('end_header\n')
+        if has_normals:
+            for point, normal in zip(points, normals):
+                f.write(
+                    f'{point[0]:.6f} {point[1]:.6f} {point[2]:.6f} '
+                    f'{normal[0]:.6f} {normal[1]:.6f} {normal[2]:.6f}\n'
+                )
+        else:
+            for point in points:
+                f.write(f'{point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataroot', type=str, default='/data/113-1/users/asingh/project/3d/MPV3D')
@@ -257,9 +282,10 @@ def main():
     parser.add_argument('--auto_iso', action='store_true', default=True, help='fallback to a valid iso level if requested level is out of range')
     parser.add_argument('--use_surface_points', action='store_true', default=False, help='use dataset surface_points (precomputed .npz) for tight bounds')
     parser.add_argument('--bound_padding', type=float, default=0.1, help='padding added to bounds when using surface points')
+    parser.add_argument('--save_point_cloud', action='store_true', default=True, help='save reconstructed surface vertices as a PLY point cloud')
     parser.add_argument('--latent_dim', type=int, default=128)
-    parser.add_argument('--sdf_hidden_dim', type=int, default=128)
-    parser.add_argument('--sdf_num_layers', type=int, default=3)
+    parser.add_argument('--sdf_hidden_dim', type=int, default=256)
+    parser.add_argument('--sdf_num_layers', type=int, default=5)
     args = parser.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -340,6 +366,12 @@ def main():
         verts, faces, normals = marching_cubes_to_obj(sdf, xs, ys, zs, iso_level, output_path)
         print(f'Saved mesh: {output_path}')
         print(f'Vertices: {len(verts)} | Faces: {len(faces)} | Normals: {len(normals)}')
+
+        if args.save_point_cloud:
+            pc_name = os.path.splitext(output_name)[0] + '.ply'
+            pc_path = os.path.join(args.output_dir, pc_name)
+            save_point_cloud_ply(verts, normals, pc_path)
+            print(f'Saved point cloud: {pc_path}')
 
 
 if __name__ == '__main__':
