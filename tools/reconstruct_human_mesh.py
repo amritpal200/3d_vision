@@ -169,6 +169,15 @@ def load_drm(opt, ckpt_path, device):
 
 
 def sample_bounds(sample, padding=0.1):
+    # If precomputed surface points exist in the sample (from .npz), use them
+    surf = sample.get('surface_points', None)
+    if isinstance(surf, torch.Tensor) and surf.numel() > 0:
+        arr = surf.detach().cpu().numpy()
+        x_min, y_min, z_min = arr.min(axis=0) - padding
+        x_max, y_max, z_max = arr.max(axis=0) + padding
+        return (float(x_min), float(x_max)), (float(y_min), float(y_max)), (float(z_min), float(z_max))
+
+    # Fallback to depth-based z bounds (original behavior)
     z_values = []
     for key in ('person_fdepth', 'person_bdepth'):
         value = sample.get(key, None)
@@ -245,6 +254,8 @@ def main():
     parser.add_argument('--chunk_size', type=int, default=65536)
     parser.add_argument('--iso_level', type=float, default=0.0)
     parser.add_argument('--auto_iso', action='store_true', default=True, help='fallback to a valid iso level if requested level is out of range')
+    parser.add_argument('--use_surface_points', action='store_true', default=False, help='use dataset surface_points (precomputed .npz) for tight bounds')
+    parser.add_argument('--bound_padding', type=float, default=0.1, help='padding added to bounds when using surface points')
     parser.add_argument('--latent_dim', type=int, default=128)
     parser.add_argument('--sdf_hidden_dim', type=int, default=128)
     parser.add_argument('--sdf_num_layers', type=int, default=3)
@@ -286,8 +297,12 @@ def main():
         with torch.no_grad():
             mtm_out = raw_mtm(agnostic, cloth)
             latent_z = mtm_out['z'].to(device)
+            # Some MTM implementations return z with shape (B,1,D). DRM expects (B,D) or (B,1,D)
+            # Accept both by removing the singleton channel if present.
+            if latent_z.dim() == 3 and latent_z.size(1) == 1:
+                latent_z = latent_z.squeeze(1)
 
-        x_bounds, y_bounds, z_bounds = sample_bounds(sample)
+        x_bounds, y_bounds, z_bounds = sample_bounds(sample, padding=args.bound_padding) if args.use_surface_points else sample_bounds(sample)
         sdf, (xs, ys, zs) = evaluate_sdf_on_grid(
             drm_net,
             latent_z,
