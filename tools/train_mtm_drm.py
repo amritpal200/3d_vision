@@ -150,9 +150,9 @@ def main():
         del state._metadata
     # load checkpoint non-strict to allow missing keys (e.g., projection heads)
     load_res = raw_mtm.load_state_dict(state, strict=False)
-    if hasattr(load_res, 'missing_keys') or hasattr(load_res, 'unexpected_keys'):
-        print('MTM load results - missing keys:', getattr(load_res, 'missing_keys', None))
+    if hasattr(load_res, 'unexpected_keys') and getattr(load_res, 'unexpected_keys', None):
         print('MTM load results - unexpected keys:', getattr(load_res, 'unexpected_keys', None))
+    print('MTM z_proj initialized from scratch and will be trained jointly with DRM')
     raw_mtm.to(device)
     raw_mtm.eval()
     for p in raw_mtm.parameters():
