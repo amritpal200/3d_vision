@@ -34,8 +34,9 @@ class DRMModel(BaseModel):
         """
         parser.add_argument('--latent_dim', type=int, default=128, help='dimension of encoded z from MPM')
         parser.add_argument('--point_dim', type=int, default=3, help='dimension of each queried point')
-        parser.add_argument('--sdf_hidden_dim', type=int, default=256, help='hidden width of the SDF MLP')
-        parser.add_argument('--sdf_num_layers', type=int, default=5, help='number of layers in the SDF MLP')
+        parser.add_argument('--sdf_hidden_dim', type=int, default=512, help='hidden width of the SDF MLP')
+        parser.add_argument('--sdf_num_layers', type=int, default=8, help='number of layers in the SDF MLP')
+        parser.add_argument('--pe_L', type=int, default=6, help='positional encoding frequencies for query points')
         parser.add_argument('--sdf_num_points', type=int, default=64, help='number of 3D query points to sample per item when simulated')
         parser.add_argument('--lambda_coarse', type=float, default=1.0, help='weight for coarse supervision loss')
         parser.add_argument('--lambda_surface', type=float, default=0.1, help='weight for surface loss')
@@ -75,6 +76,7 @@ class DRMModel(BaseModel):
             init_type=opt.init_type,
             init_gain=opt.init_gain,
             gpu_ids=self.gpu_ids,
+            pe_L=getattr(opt, 'pe_L', 6),
         )
 
         if self.isTrain:
@@ -184,27 +186,33 @@ class DRMModel(BaseModel):
 
     def backward_G(self):
         """Calculate losses, gradients; called in every training iteration"""
+        total_loss = None
+
         # Coarse supervision loss: L_coarse = mean(|f_coarse(p_i) - s_i|)
-        if self.sdf_gt.numel() > 0:
-            self.loss_coarse = torch.abs(self.sdf_pred - self.sdf_gt).mean()
+        if self.lambda_coarse > 0 and self.sdf_gt.numel() > 0:
+            # self.loss_coarse = torch.abs(self.sdf_pred - self.sdf_gt).mean() # for l1 loss 
+            self.loss_coarse = F.mse_loss(self.sdf_pred, self.sdf_gt) # for l2 loss
+            total_loss = self.lambda_coarse * self.loss_coarse if total_loss is None else total_loss + self.lambda_coarse * self.loss_coarse
         else:
             self.loss_coarse = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 
         # Surface loss: L_surface = mean(|f(p_i)|) on surface points if provided
-        if self.surface_points is not None and self.surface_points.numel() > 0:
+        if self.lambda_surface > 0 and self.surface_points is not None and self.surface_points.numel() > 0:
             surface_pred = self.netDRM(self.z, self.surface_points)
             self.loss_surface = surface_pred.abs().mean()
+            total_loss = self.lambda_surface * self.loss_surface if total_loss is None else total_loss + self.lambda_surface * self.loss_surface
         else:
             self.loss_surface = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 
         # Sign loss: L_sign = mean(max(0, -y_i * f(p_i)))
-        if self.sign_labels is not None and self.sign_labels.numel() > 0:
+        if self.lambda_sign > 0 and self.sign_labels is not None and self.sign_labels.numel() > 0:
             self.loss_sign = torch.relu(-self.sign_labels * self.sdf_pred).mean()
+            total_loss = self.lambda_sign * self.loss_sign if total_loss is None else total_loss + self.lambda_sign * self.loss_sign
         else:
             self.loss_sign = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 
         # Eikonal loss: L_eikonal = mean((||grad f|| - 1)^2)
-        if self.points is not None and self.points.numel() > 0:
+        if self.lambda_eikonal > 0 and self.points is not None and self.points.numel() > 0:
             _, grads = self._predict_with_grad(self.points)
             grad_norm = torch.linalg.norm(grads, dim=-1)
             # If SDFs were normalized when precomputing, the eikonal target should be 1/scale
@@ -221,25 +229,24 @@ class DRMModel(BaseModel):
                 target = 1.0
 
             self.loss_eikonal = ((grad_norm - target) ** 2).mean()
+            total_loss = self.lambda_eikonal * self.loss_eikonal if total_loss is None else total_loss + self.lambda_eikonal * self.loss_eikonal
         else:
             self.loss_eikonal = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 
         # Normal consistency loss: L_normal = mean(1 - dot(n_pred, n_gt))
-        if self.surface_points is not None and self.surface_normals is not None and self.surface_points.numel() > 0 and self.surface_normals.numel() > 0:
+        if self.lambda_normal > 0 and self.surface_points is not None and self.surface_normals is not None and self.surface_points.numel() > 0 and self.surface_normals.numel() > 0:
             _, surface_grads = self._predict_with_grad(self.surface_points)
             n_pred = F.normalize(surface_grads, p=2, dim=-1, eps=1e-8)
             n_gt = F.normalize(self.surface_normals, p=2, dim=-1, eps=1e-8)
             self.loss_normal = (1.0 - (n_pred * n_gt).sum(dim=-1)).mean()
+            total_loss = self.lambda_normal * self.loss_normal if total_loss is None else total_loss + self.lambda_normal * self.loss_normal
         else:
             self.loss_normal = torch.zeros(1, device=self.device, dtype=self.sdf_pred.dtype)
 
-        self.loss_sdf = (
-            self.lambda_coarse * self.loss_coarse
-            + self.lambda_surface * self.loss_surface
-            + self.lambda_sign * self.loss_sign
-            + self.lambda_eikonal * self.loss_eikonal
-            + self.lambda_normal * self.loss_normal
-        )
+        if total_loss is None:
+            total_loss = self.sdf_pred.sum() * 0.0
+
+        self.loss_sdf = total_loss
         self.loss_sdf.backward()
 
 

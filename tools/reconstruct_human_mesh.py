@@ -1,6 +1,6 @@
 
 # CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0
-# python3 tools/reconstruct_human_mesh.py --dataroot /home/asingh/Desktop/uni/3d_vision/project/MPV3D --datalist test_pairs --sample_index 0 --num_images 1 --mtm_ckpt /home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth --drm_ckpt ./checkpoints/aligned/DRM_train/best_net_DRM.pth --output_dir ./mesh_results
+# CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 python3 tools/reconstruct_human_mesh.py --dataroot /data/113-1/users/asingh/project/3d/MPV3D --datalist test_pairs --sample_index 0 --num_images 1 --mtm_ckpt /data/113-1/users/asingh/project/3d/checkpoints/aligned/DRM_train/best_net_MTM.pth --drm_ckpt /data/113-1/users/asingh/project/3d/checkpoints/aligned/DRM_train/best_net_DRM.pth --output_dir ./mesh_results
 
 """Reconstruct a 3D human mesh from trained MTM + DRM checkpoints.
 
@@ -87,14 +87,15 @@ def build_model_opt(args, gpu_ids):
     opt.point_dim = 3
     opt.sdf_hidden_dim = args.sdf_hidden_dim
     opt.sdf_num_layers = args.sdf_num_layers
+    opt.pe_L = args.pe_L
     opt.norm = 'instance'
     opt.init_type = 'normal'
     opt.init_gain = 0.02
     opt.gpu_ids = gpu_ids
     opt.isTrain = False
     opt.lr = 0.001
-    # opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
-    opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
+    opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
+    # opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
     opt.datamode = 'aligned'
     opt.name = 'DRM_train'
     opt.display_ncols = 2
@@ -157,6 +158,7 @@ def load_drm(opt, ckpt_path, device):
         init_type='normal',
         init_gain=0.02,
         gpu_ids=opt.gpu_ids,
+        pe_L=opt.pe_L,
     )
     state = load_state_dict(ckpt_path, device)
     load_res = net.load_state_dict(state, strict=False)
@@ -274,8 +276,8 @@ def main():
     parser.add_argument('--start_index', type=int, default=0, help='dataset index to start from')
     parser.add_argument('--mtm_ckpt', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth')
     parser.add_argument('--drm_ckpt', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints/aligned/DRM_train/epoch_9_net_DRM.pth')
-    parser.add_argument('--output_dir', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/mesh_results')
-    parser.add_argument('--output_name', type=str, default='/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/mesh_results/reconstruction.obj')
+    parser.add_argument('--output_dir', type=str, default='/home/asingh/proves/3d/3d_vision/mesh_results')
+    parser.add_argument('--output_name', type=str, default='/home/asingh/proves/3d/3d_vision/mesh_results/reconstruction.obj')
     parser.add_argument('--resolution', type=int, default=96)
     parser.add_argument('--chunk_size', type=int, default=65536)
     parser.add_argument('--iso_level', type=float, default=0.0)
@@ -284,8 +286,9 @@ def main():
     parser.add_argument('--bound_padding', type=float, default=0.1, help='padding added to bounds when using surface points')
     parser.add_argument('--save_point_cloud', action='store_true', default=True, help='save reconstructed surface vertices as a PLY point cloud')
     parser.add_argument('--latent_dim', type=int, default=128)
-    parser.add_argument('--sdf_hidden_dim', type=int, default=256)
-    parser.add_argument('--sdf_num_layers', type=int, default=5)
+    parser.add_argument('--sdf_hidden_dim', type=int, default=512)
+    parser.add_argument('--sdf_num_layers', type=int, default=8)
+    parser.add_argument('--pe_L', type=int, default=6)
     args = parser.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

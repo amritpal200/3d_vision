@@ -681,12 +681,12 @@ def define_TFM(input_nc=9, output_nc=4, num_downs=6, ngf=64, norm='instance', us
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
-def define_DRM(latent_dim=128, point_dim=3, hidden_dim=256, num_layers=5, output_dim=1,
-               norm='instanc', init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_DRM(latent_dim=128, point_dim=3, hidden_dim=512, num_layers=8, output_dim=1,
+               norm='instanc', init_type='normal', init_gain=0.02, gpu_ids=[], pe_L=6):
     norm_layer = get_norm_layer(norm_type=norm)
 
     net = SDF(latent_dim=latent_dim, point_dim=point_dim, hidden_dim=hidden_dim,
-              num_layers=num_layers, output_dim=output_dim)
+              num_layers=num_layers, output_dim=output_dim, pe_L=pe_L)
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
@@ -802,19 +802,32 @@ class MTM(nn.Module):
 
 
 class SDF(nn.Module):
-    def __init__(self, latent_dim=128, point_dim=3, hidden_dim=256, num_layers=5, output_dim=1):
+    def __init__(self, latent_dim=128, point_dim=3, hidden_dim=512, num_layers=8, output_dim=1, pe_L=6):
         super(SDF, self).__init__()
         self.latent_dim = latent_dim
         self.point_dim = point_dim
+        self.pe_L = pe_L
 
-        layers = []
-        current_dim = latent_dim + point_dim
-        for _ in range(max(num_layers - 1, 1)):
-            layers.append(nn.Linear(current_dim, hidden_dim))
-            layers.append(nn.ReLU(inplace=True))
+        encoded_point_dim = point_dim * (1 + 2 * pe_L)
+        self.input_dim = latent_dim + encoded_point_dim
+        self.skip_after = 3
+
+        self.layers = nn.ModuleList()
+        current_dim = self.input_dim
+        for layer_index in range(max(num_layers - 1, 1)):
+            if layer_index == self.skip_after:
+                current_dim += self.input_dim
+            self.layers.append(nn.Linear(current_dim, hidden_dim))
             current_dim = hidden_dim
-        layers.append(nn.Linear(current_dim, output_dim))
-        self.mlp = nn.Sequential(*layers)
+
+        self.output_layer = nn.Linear(current_dim, output_dim)
+
+    def positional_encoding(self, x):
+        out = [x]
+        for i in range(self.pe_L):
+            out.append(torch.sin((2 ** i) * torch.pi * x))
+            out.append(torch.cos((2 ** i) * torch.pi * x))
+        return torch.cat(out, dim=-1)
 
     def forward(self, latent_z, points):
         if latent_z.dim() == 2:
@@ -829,9 +842,19 @@ class SDF(nn.Module):
         elif latent_z.size(1) != points.size(1):
             raise ValueError('latent_z and points must share the same sample dimension')
 
+        points = self.positional_encoding(points)
         sdf_input = torch.cat([latent_z, points], dim=-1)
-        sdf_input = sdf_input.reshape(-1, sdf_input.size(-1))
-        sdf = self.mlp(sdf_input)
+        skip_input = sdf_input
+
+        x = sdf_input.reshape(-1, sdf_input.size(-1))
+        skip_flat = skip_input.reshape(-1, skip_input.size(-1))
+
+        for layer_index, layer in enumerate(self.layers):
+            if layer_index == self.skip_after:
+                x = torch.cat([x, skip_flat], dim=-1)
+            x = F.relu(layer(x), inplace=True)
+
+        sdf = self.output_layer(x)
         return sdf.view(points.size(0), points.size(1), -1)
 
 class UnetGenerator(nn.Module):

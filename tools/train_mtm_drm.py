@@ -1,5 +1,5 @@
 # CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0
-# python3 tools/train_mtm_drm.py --num_epochs 100 --batch_size 100 --sdf_num_points 512 --save_freq 1000
+# python3 tools/train_mtm_drm.py --num_epochs 200 --batch_size 200 --sdf_num_points 1024 --save_freq 1000
 
 """Simple MTM+DRM trainer (proof-of-concept)
 
@@ -26,26 +26,26 @@ from torch.utils.data import DataLoader, random_split
 MTM_CKPT = '/data/113-1/users/asingh/project/3d/checkpoints/MTM/latest_net_MTM.pth'
 # MTM_CKPT = '/home/asingh/Desktop/uni/3d_vision/project/latest_net_MTM.pth'
 NUM_ITERS = 20
-BATCH_SIZE = 2
+BATCH_SIZE = 150
 
 opt = SimpleNamespace()
-opt.latent_dim = 128
-opt.point_dim = 3
-opt.sdf_hidden_dim = 256
-opt.sdf_num_layers = 5
+opt.latent_dim = 512 # 128
+opt.point_dim = 3 # 3
+opt.sdf_hidden_dim = 512 # 256
+opt.sdf_num_layers = 7 # 5
 opt.sdf_num_points = 1024
-opt.lambda_coarse = 0.1 # 1.0
-opt.lambda_surface = 0.1 # 0.1
-opt.lambda_sign = 0.05 # 0.1
-opt.lambda_eikonal = 0.01 # 0.1
-opt.lambda_normal = 0.01 # 0.1
+opt.lambda_coarse = 5.0 # 1.0
+opt.lambda_surface = 0.0 # 0.1
+opt.lambda_sign = 0.0 # 0.1
+opt.lambda_eikonal = 0.0 # 0.1
+opt.lambda_normal = 0.0 # 0.1
 opt.norm = 'instance'
-opt.init_type = 'normal'
-opt.init_gain = 0.02
+opt.init_type = 'xavier' # 'normal', 'xavier'
+opt.init_gain = 1.0 # 0.02 for normal, 1.0 for xavier
 opt.gpu_ids = []
 opt.isTrain = True
-opt.lr = 0.0001
-opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/2/'
+opt.lr = 1e-3
+opt.checkpoints_dir = '/data/113-1/users/asingh/project/3d/checkpoints/'
 # opt.checkpoints_dir = '/home/asingh/Desktop/uni/3d_vision/project/M3D-VTON/checkpoints'
 opt.datamode = 'aligned'
 opt.name = 'DRM_train'
@@ -231,6 +231,18 @@ def main():
 
             drm.set_input(drm_batch)
             drm.optimize_parameters()
+            # print(
+            #     drm.loss_coarse.item(),
+            #     drm.sdf_pred.min().item(),
+            #     drm.sdf_pred.max().item()
+            # )
+
+            # for name, p in drm.netDRM.named_parameters():
+            #     if p.grad is not None:
+            #         print(name, p.grad.abs().mean().item())
+            #         break
+            
+
             if optimizer_z is not None:
                 optimizer_z.step()
 
