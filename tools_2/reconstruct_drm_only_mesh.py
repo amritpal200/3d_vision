@@ -1,5 +1,5 @@
 
-# CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 python3 tools_2/reconstruct_drm_only_mesh.py --checkpoint /data/113-1/users/asingh/project/3d/checkpoints/aligned/DRM_only_bootstrap/best_net_DRMOnly.pth --dataroot /data/113-1/users/asingh/project/3d/MPV3D --datalist train_pairs --sample_index 0 --output_obj mesh_results/recon_0.obj --resolution 96 --chunk_size 65536 --gpu_id 0 --save_point_cloud
+# CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=6 python3 tools_2/reconstruct_drm_only_mesh.py --checkpoint /data/113-1/users/asingh/project/3d/checkpoints/all_losses/aligned/DRM_only_bootstrap/best_net_DRMOnly.pth --dataroot /data/113-1/users/asingh/project/3d/MPV3D --datalist train_pairs --sample_index 0 --output_obj mesh_results/recon_0.obj --resolution 96 --chunk_size 65536 --gpu_id 0 --save_point_cloud
 
 
 #!/usr/bin/env python3
@@ -213,6 +213,20 @@ def main():
         ],
         axis=1,
     )
+
+    # !! New added Code
+    eps = 0.03
+
+    mins = np.array([x_bounds[0], y_bounds[0], z_bounds[0]])
+    maxs = np.array([x_bounds[1], y_bounds[1], z_bounds[1]])
+
+    near_min = np.abs(verts_xyz - mins[None, :]) < eps
+    near_max = np.abs(verts_xyz - maxs[None, :]) < eps
+    near_boundary = np.any(near_min | near_max, axis=1)
+
+    face_keep = ~np.any(near_boundary[faces], axis=1)
+    faces = faces[face_keep]
+    # !! Finish of new added code
 
     os.makedirs(os.path.dirname(args.output_obj) or '.', exist_ok=True)
     save_obj(args.output_obj, verts_xyz, faces)
