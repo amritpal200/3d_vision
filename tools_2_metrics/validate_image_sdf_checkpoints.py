@@ -2,8 +2,6 @@
 """Validate and compare image-conditioned SDF checkpoints."""
 
 import argparse
-import csv
-import math
 import os
 import sys
 from types import SimpleNamespace
@@ -18,10 +16,17 @@ for path in (PROJECT_ROOT, CURRENT_DIR, IMAGE_ENCODER_DIR):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from sdf_metrics import evaluate_sdf, format_metrics_table, is_better_metrics, log_metrics_to_wandb
-from common import create_image_sdf_dataset, get_device, prepare_sdf_batch, safe_collate
-from image_encoder_model import build_image_encoder_from_args
-from models_2 import DRMSDFModel
+from tools_2_image_encoder.common import create_image_sdf_dataset, get_device, prepare_sdf_batch, safe_collate  # noqa: E402
+from tools_2_image_encoder.image_encoder_model import build_image_encoder_from_args  # noqa: E402
+from models_2 import DRMSDFModel  # noqa: E402
+from validation_common import (  # noqa: E402
+    RunningSDFMetrics,
+    add_mesh_eval_args,
+    init_wandb,
+    maybe_add_mesh_metric,
+    print_and_save_results,
+    tensor_item_points,
+)
 
 
 def parse_args():
@@ -49,6 +54,7 @@ def parse_args():
     parser.add_argument("--num_surface_points", type=int, default=100000)
     parser.add_argument("--grid_shape", type=int, nargs=3, default=None, help="Optional dense grid shape: nz ny nx")
     parser.add_argument("--output_csv", type=str, default="")
+    add_mesh_eval_args(parser)
 
     parser.add_argument("--wandb_project", type=str, default="")
     parser.add_argument("--wandb_run_name", type=str, default="image_sdf_checkpoint_validation")
@@ -95,125 +101,40 @@ def load_image_sdf_checkpoint(checkpoint_path, device):
     return encoder, drm
 
 
-def write_csv(path, rows):
-    if not path:
-        return
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fieldnames = [
-        "model",
-        "near_surface_mae",
-        "sign_accuracy",
-        "chamfer_distance",
-        "f_score",
-        "normal_consistency",
-    ]
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
-
-
-def nanmean(values):
-    finite = [float(v) for v in values if v is not None and not math.isnan(float(v))]
-    if not finite:
-        return float("nan")
-    return float(sum(finite) / len(finite))
-
-
 def validate_checkpoint(checkpoint_path, model_name, dataloader, args, device, wandb_run=None):
     encoder, drm = load_image_sdf_checkpoint(checkpoint_path, device)
-
-    near_abs_sum = 0.0
-    near_count = 0
-    sign_correct = 0.0
-    total_count = 0
-    mesh_metric_values = {
-        "chamfer_distance": [],
-        "f_score": [],
-        "normal_consistency": [],
-    }
-    mesh_warning_printed = False
-    seen_batches = 0
-    valid_batches = 0
-    empty_batches = 0
-    gt_min = float("inf")
-    gt_max = float("-inf")
+    meter = RunningSDFMetrics(model_name, args)
 
     with torch.no_grad():
         for batch_index, batch in enumerate(dataloader):
             if args.max_batches > 0 and batch_index >= args.max_batches:
                 break
-            seen_batches += 1
+            meter.seen_batches += 1
 
             prepared = prepare_sdf_batch(batch, device)
             if prepared is None:
-                empty_batches += 1
+                meter.add_empty_batch()
                 continue
-            valid_batches += 1
 
             latent_z = encoder(prepared["images"]).unsqueeze(1)
             pred_sdf = drm(latent_z, prepared["points"])
-            gt_sdf = prepared["sdf_gt"]
+            meter.add_batch(pred_sdf, prepared["sdf_gt"], points=prepared["points"])
 
-            pred_flat = pred_sdf.reshape(-1)
-            gt_flat = gt_sdf.reshape(-1)
-            if gt_flat.numel() > 0:
-                gt_min = min(gt_min, float(gt_flat.min().detach().item()))
-                gt_max = max(gt_max, float(gt_flat.max().detach().item()))
-            near_mask = torch.abs(gt_flat) < float(args.tau)
-            if near_mask.any():
-                near_abs_sum += torch.abs(pred_flat[near_mask] - gt_flat[near_mask]).sum().item()
-                near_count += int(near_mask.sum().item())
+            names = list(batch.get("im_name", []))
+            for item_index in range(latent_z.shape[0]):
+                sample_name = names[item_index] if item_index < len(names) else f"sample_{batch_index}_{item_index}.png"
+                maybe_add_mesh_metric(
+                    meter,
+                    drm,
+                    latent_z[item_index:item_index + 1],
+                    args,
+                    device,
+                    sample_name,
+                    surface_points=tensor_item_points(prepared.get("surface_points"), item_index),
+                    sdf_points=tensor_item_points(prepared.get("points"), item_index),
+                )
 
-            sign_correct += ((pred_flat < 0) == (gt_flat < 0)).float().sum().item()
-            total_count += int(gt_flat.numel())
-
-            if args.grid_shape is not None:
-                batch_size = pred_sdf.shape[0]
-                for item_index in range(batch_size):
-                    metrics, details = evaluate_sdf(
-                        pred_sdf[item_index].detach().cpu(),
-                        gt_sdf[item_index].detach().cpu(),
-                        points=prepared["points"][item_index].detach().cpu(),
-                        grid_shape=args.grid_shape,
-                        tau=args.tau,
-                        delta=args.delta,
-                        num_surface_points=args.num_surface_points,
-                        return_details=True,
-                    )
-                    for key in mesh_metric_values:
-                        mesh_metric_values[key].append(metrics[key])
-                    if not mesh_warning_printed and "mesh_metrics_error" in details:
-                        print(f"[{model_name}] mesh metrics warning: {details['mesh_metrics_error']}")
-                        mesh_warning_printed = True
-
-    metrics = {
-        "near_surface_mae": near_abs_sum / near_count if near_count > 0 else float("nan"),
-        "sign_accuracy": sign_correct / total_count if total_count > 0 else float("nan"),
-        "chamfer_distance": nanmean(mesh_metric_values["chamfer_distance"]),
-        "f_score": nanmean(mesh_metric_values["f_score"]),
-        "normal_consistency": nanmean(mesh_metric_values["normal_consistency"]),
-    }
-
-    gt_range = "empty" if total_count == 0 else f"[{gt_min:.6g}, {gt_max:.6g}]"
-    print(
-        f"[{model_name}] validation diagnostics: "
-        f"seen_batches={seen_batches}, valid_batches={valid_batches}, empty_batches={empty_batches}, "
-        f"total_sdf_points={total_count}, near_surface_points={near_count}, gt_sdf_range={gt_range}"
-    )
-    if total_count == 0:
-        print(
-            f"[{model_name}] no SDF validation points were loaded. Check --datalist, dataset split, "
-            f"and whether samples contain sdf_points/sdf_gt."
-        )
-    if near_count == 0 and total_count > 0:
-        print(f"[{model_name}] no near-surface validation points found with tau={args.tau}; try a larger --tau such as 0.05")
-    if args.grid_shape is None:
-        print(f"[{model_name}] mesh metrics skipped: pass --grid_shape nz ny nx for dense-grid SDF validation")
-
-    log_metrics_to_wandb(metrics, prefix=f"val/{model_name}", wandb_run=wandb_run)
-    return {"model": model_name, **metrics}
+    return meter.finalize()
 
 
 def main():
@@ -235,42 +156,15 @@ def main():
         collate_fn=safe_collate,
     )
 
-    wandb_run = None
-    if args.wandb_mode != "disabled" and args.wandb_project:
-        try:
-            import wandb
-
-            wandb_run = wandb.init(
-                project=args.wandb_project,
-                name=args.wandb_run_name,
-                mode=args.wandb_mode,
-                config=vars(args),
-            )
-        except Exception as exc:
-            print(f"wandb init failed; continuing without wandb: {exc}")
-
+    wandb_run = init_wandb(args, "image_sdf_checkpoint_validation")
     rows = []
-    best_row = None
     for index, checkpoint_path in enumerate(args.checkpoints):
         model_name = args.model_names[index] if args.model_names else os.path.splitext(os.path.basename(checkpoint_path))[0]
         print(f"Validating {model_name}: {checkpoint_path}")
-        row = validate_checkpoint(checkpoint_path, model_name, dataloader, args, device, wandb_run=wandb_run)
-        rows.append(row)
-        if is_better_metrics(row, best_row):
-            best_row = row
+        rows.append(validate_checkpoint(checkpoint_path, model_name, dataloader, args, device, wandb_run=wandb_run))
 
-    print(format_metrics_table(rows))
-    if best_row is not None:
-        print(f"Best model by priority: {best_row['model']}")
-
-    write_csv(args.output_csv, rows)
-    if args.output_csv:
-        print(f"Wrote metrics CSV: {args.output_csv}")
-
-    if wandb_run is not None:
-        wandb_run.finish()
+    print_and_save_results(rows, args, wandb_run=wandb_run)
 
 
 if __name__ == "__main__":
     main()
-

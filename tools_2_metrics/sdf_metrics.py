@@ -298,6 +298,137 @@ def _mesh_metrics(
     return metrics, details
 
 
+
+
+def mesh_metrics_from_arrays(
+    pred_vertices,
+    pred_faces,
+    gt_vertices,
+    gt_faces,
+    *,
+    delta: float = 0.01,
+    num_surface_points: int = 100000,
+    random_seed: int = 2026,
+    nearest_chunk_size: int = 4096,
+):
+    """Compute Chamfer/F-score/normal consistency from two triangle meshes."""
+    metrics = {
+        "chamfer_distance": _nan(),
+        "f_score": _nan(),
+        "normal_consistency": _nan(),
+    }
+    details = {}
+    try:
+        pred_vertices = np.asarray(pred_vertices, dtype=np.float32)
+        pred_faces = np.asarray(pred_faces, dtype=np.int64)
+        gt_vertices = np.asarray(gt_vertices, dtype=np.float32)
+        gt_faces = np.asarray(gt_faces, dtype=np.int64)
+        pred_points, pred_normals = sample_points_from_mesh(
+            pred_vertices,
+            pred_faces,
+            int(num_surface_points),
+            int(random_seed),
+        )
+        gt_points, gt_normals = sample_points_from_mesh(
+            gt_vertices,
+            gt_faces,
+            int(num_surface_points),
+            int(random_seed) + 17,
+        )
+    except Exception as exc:
+        details["surface_sampling_error"] = str(exc)
+        return metrics, details
+
+    pred_to_gt_sq, pred_to_gt_idx = _nearest_neighbor_squared(
+        pred_points,
+        gt_points,
+        int(nearest_chunk_size),
+    )
+    gt_to_pred_sq, gt_to_pred_idx = _nearest_neighbor_squared(
+        gt_points,
+        pred_points,
+        int(nearest_chunk_size),
+    )
+
+    metrics["chamfer_distance"] = float(pred_to_gt_sq.mean() + gt_to_pred_sq.mean())
+    delta_sq = float(delta) ** 2
+    precision = float((pred_to_gt_sq <= delta_sq).mean())
+    recall = float((gt_to_pred_sq <= delta_sq).mean())
+    metrics["f_score"] = float(2.0 * precision * recall / (precision + recall)) if precision + recall > 0 else 0.0
+
+    pred_normal_match = np.abs((pred_normals * gt_normals[pred_to_gt_idx]).sum(axis=-1))
+    gt_normal_match = np.abs((gt_normals * pred_normals[gt_to_pred_idx]).sum(axis=-1))
+    metrics["normal_consistency"] = float(0.5 * (pred_normal_match.mean() + gt_normal_match.mean()))
+    details["precision"] = f"{precision:.6f}"
+    details["recall"] = f"{recall:.6f}"
+    return metrics, details
+
+
+def load_mesh_vertices_faces(mesh_path):
+    """Load vertices/faces from OBJ/PLY using trimesh first, then Open3D."""
+    try:
+        import trimesh
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
+        if isinstance(mesh, trimesh.Scene):
+            meshes = [g for g in mesh.geometry.values() if hasattr(g, "faces") and len(g.faces) > 0]
+            if meshes:
+                mesh = trimesh.util.concatenate(meshes)
+        vertices = np.asarray(mesh.vertices, dtype=np.float32)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        if len(vertices) > 0 and len(faces) > 0:
+            return vertices, faces, ""
+    except Exception as exc:
+        trimesh_error = str(exc)
+    else:
+        trimesh_error = "trimesh loaded no triangle faces"
+
+    try:
+        import open3d as o3d
+        mesh = o3d.io.read_triangle_mesh(mesh_path)
+        vertices = np.asarray(mesh.vertices, dtype=np.float32)
+        faces = np.asarray(mesh.triangles, dtype=np.int64)
+        if len(vertices) > 0 and len(faces) > 0:
+            return vertices, faces, ""
+        return None, None, "Open3D loaded no triangle faces"
+    except Exception as exc:
+        return None, None, f"failed to load mesh with trimesh/open3d: trimesh={trimesh_error}; open3d={exc}"
+
+
+def mesh_metrics_from_files(
+    pred_mesh_path,
+    gt_mesh_path,
+    *,
+    delta: float = 0.01,
+    num_surface_points: int = 100000,
+    random_seed: int = 2026,
+    nearest_chunk_size: int = 4096,
+):
+    pred_vertices, pred_faces, pred_error = load_mesh_vertices_faces(pred_mesh_path)
+    gt_vertices, gt_faces, gt_error = load_mesh_vertices_faces(gt_mesh_path)
+    details = {}
+    if pred_error:
+        details["pred_mesh_error"] = pred_error
+    if gt_error:
+        details["gt_mesh_error"] = gt_error
+    if pred_error or gt_error:
+        return {
+            "chamfer_distance": _nan(),
+            "f_score": _nan(),
+            "normal_consistency": _nan(),
+        }, details
+    metrics, metric_details = mesh_metrics_from_arrays(
+        pred_vertices,
+        pred_faces,
+        gt_vertices,
+        gt_faces,
+        delta=delta,
+        num_surface_points=num_surface_points,
+        random_seed=random_seed,
+        nearest_chunk_size=nearest_chunk_size,
+    )
+    details.update(metric_details)
+    return metrics, details
+
 def evaluate_sdf(
     pred_sdf,
     gt_sdf,
