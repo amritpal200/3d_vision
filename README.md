@@ -104,10 +104,7 @@ reported and skipped by the safe dataset wrappers used in the new pipelines.
 
 Download the project checkpoints from the following placeholder link:
 
-**[Download pretrained models from Google Drive](https://drive.google.com/drive/folders/1EXAMPLE_MODEL_DOWNLOAD_LINK?usp=sharing)**
-
-Replace this link with the final Google Drive URL before publishing the
-repository. A convenient local layout is:
+**[Download pretrained models from Google Drive](https://drive.google.com/drive/folders/169KMyA8Z5wpeanLZioBYCSHSPxVx-rxw?usp=sharing)**
 
 ```text
 pretrained/
