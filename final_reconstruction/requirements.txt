@@ -1,0 +1,4 @@
+open3d>=0.17
+numpy>=1.21
+pillow>=9.0
+scipy>=1.7

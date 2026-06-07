@@ -1,0 +1,13 @@
+# renders temporales
+diagnosticos/_*
+**/_render_*.png
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# sistema
+.DS_Store
+Thumbs.db
