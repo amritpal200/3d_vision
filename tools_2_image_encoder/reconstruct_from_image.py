@@ -5,7 +5,6 @@
 # CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=6 python3 tools_2_image_encoder/reconstruct_from_image.py --checkpoint /data/125-1/users/asingh/proves/drm_IE/3_losses_2nd_trainBoth_newDRM/aligned/DRM_image_conditioned/latest_net_DRMImage.pth --image_path /data/113-1/users/asingh/project/3d/MPV3D/image/4HI21D002-K11@11.1=person_whole_front.png --output_obj mesh_results/ --resolution 96  --x_bounds -0.45 0.45 --y_bounds -1.0 1.0 --z_bounds -0.3 0.3
 
 
-
 #!/usr/bin/env python3
 """Reconstruct a mesh from one image using an image-conditioned DRM checkpoint."""
 

@@ -19,6 +19,7 @@ for path in (PROJECT_ROOT, CURRENT_DIR, IMAGE_ENCODER_DIR):
         sys.path.insert(0, path)
 
 from tools_2_mtm_z.common import build_mtm, create_mtm_dataset, get_device, prepare_mtm_inputs  # noqa: E402
+from tools_2_image_encoder.common import load_conditioning_image  # noqa: E402
 from tools_2_image_encoder.image_encoder_model import build_image_encoder_from_args  # noqa: E402
 from models_2 import DRMSDFModel  # noqa: E402
 from tools_2.reconstruct_drm_only_mesh import evaluate_sdf_grid, save_obj  # noqa: E402
@@ -41,6 +42,15 @@ def parse_args():
     parser.add_argument("--dataroot", type=str, default="mpv3d_example")
     parser.add_argument("--datalist", type=str, default="test_pairs")
     parser.add_argument("--datamode", type=str, default="aligned")
+    parser.add_argument(
+        "--image_path",
+        type=str,
+        default="",
+        help=(
+            "Conditioning RGB image. Its filename must exist in --datalist so "
+            "the matching MTM agnostic and cloth inputs can be loaded."
+        ),
+    )
     parser.add_argument("--sample_index", type=int, default=0)
     parser.add_argument("--output_obj", type=str, default="mesh_results/mtm_z_reconstruction.obj")
     parser.add_argument("--output_point_cloud", type=str, default="")
@@ -82,6 +92,8 @@ def image_encoder_runtime(config):
     image_latent_dim = int(config.get("image_latent_dim", image_config.get("latent_dim", config["latent_dim"])))
     return SimpleNamespace(
         latent_dim=image_latent_dim,
+        img_width=int(image_config.get("img_width", 320)),
+        img_height=int(image_config.get("img_height", 512)),
         image_channels=int(image_config.get("image_channels", 3)),
         encoder_base_channels=int(image_config.get("encoder_base_channels", 32)),
         encoder_num_blocks=int(image_config.get("encoder_num_blocks", 5)),
@@ -98,6 +110,25 @@ def resolve_bounds(args):
         tuple(args.y_bounds) if args.y_bounds is not None else py,
         tuple(args.z_bounds) if args.z_bounds is not None else pz,
     )
+
+
+def resolve_sample_index(args, base_dataset):
+    if not args.image_path:
+        return int(args.sample_index)
+    if not os.path.isfile(args.image_path):
+        raise FileNotFoundError(f"Image not found: {args.image_path}")
+
+    image_name = os.path.basename(args.image_path)
+    sample_names = list(getattr(base_dataset, "im_names", []))
+    if image_name not in sample_names:
+        raise ValueError(
+            f'Image "{image_name}" was not found in {args.dataroot}/{args.datalist}.txt. '
+            "MTM reconstruction needs the matching datalist entry to load its "
+            "agnostic and cloth inputs."
+        )
+    sample_index = sample_names.index(image_name)
+    print(f"Resolved image {image_name} to sample_index={sample_index}")
+    return sample_index
 
 
 def main():
@@ -141,7 +172,8 @@ def main():
 
     mtm = build_mtm(args, runtime.mtm_latent_dim, device)
     mtm.load_state_dict(checkpoint["mtm_state"], strict=False)
-    encoder = build_image_encoder_from_args(image_encoder_runtime(config)).to(device)
+    encoder_runtime = image_encoder_runtime(config)
+    encoder = build_image_encoder_from_args(encoder_runtime).to(device)
     encoder.load_state_dict(checkpoint["encoder_state"])
     drm = DRMSDFModel(
         latent_dim=runtime.latent_dim,
@@ -155,19 +187,30 @@ def main():
     encoder.eval()
     drm.eval()
 
-    dataset, _ = create_mtm_dataset(args, is_train=True, serial_batches=True)
-    sample = dataset[args.sample_index]
+    dataset, base_dataset = create_mtm_dataset(args, is_train=True, serial_batches=True)
+    sample_index = resolve_sample_index(args, base_dataset)
+    if sample_index < 0 or sample_index >= len(dataset):
+        raise IndexError(f"sample_index must be in [0, {len(dataset) - 1}], got {sample_index}")
+    sample = dataset[sample_index]
     if sample is None:
-        raise RuntimeError(f"Sample {args.sample_index} could not be loaded.")
+        raise RuntimeError(f"Sample {sample_index} could not be loaded.")
     batch = {key: value.unsqueeze(0) if isinstance(value, torch.Tensor) else value for key, value in sample.items()}
     mtm_inputs = prepare_mtm_inputs(batch, device)
     if mtm_inputs is None:
         raise RuntimeError("Sample does not contain MTM inputs.")
     agnostic, cloth = mtm_inputs
-    image = batch.get("conditioning_image", batch.get("person"))
-    if not isinstance(image, torch.Tensor):
-        raise RuntimeError("Sample does not contain person/conditioning_image for image encoder z.")
-    image = image.to(device)
+    if args.image_path:
+        image = load_conditioning_image(
+            args.image_path,
+            image_width=encoder_runtime.img_width,
+            image_height=encoder_runtime.img_height,
+            image_channels=encoder_runtime.image_channels,
+        ).unsqueeze(0).to(device)
+    else:
+        image = batch.get("conditioning_image", batch.get("person"))
+        if not isinstance(image, torch.Tensor):
+            raise RuntimeError("Sample does not contain person/conditioning_image for image encoder z.")
+        image = image.to(device)
     with torch.no_grad():
         z_mtm = mtm(agnostic, cloth)["z"]
         z_image = encoder(image).unsqueeze(1)
